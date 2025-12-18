@@ -1,0 +1,51 @@
+name: Update Trading Data
+
+on:
+  schedule:
+    # TQQQ: 화~토 한국시간 06:00 (미국 장 마감 후) = UTC 21:00 월~금
+    - cron: '0 21 * * 1-5'
+    
+    # 4H 캔들: 한국시간 01:30, 05:30, 09:30, 13:30, 17:30, 21:30
+    # UTC 기준: 16:30, 20:30 (전날), 00:30, 04:30, 08:30, 12:30
+    - cron: '0 0,4,8,12,16,20 * * *'
+  
+  # 수동 실행 가능
+  workflow_dispatch:
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install pandas numpy yfinance requests pyupbit
+    
+    - name: Run data update script
+      run: python scripts/update_data.py
+      env:
+        TZ: 'Asia/Seoul'
+    
+    - name: Check for changes
+      id: git-check
+      run: |
+        git diff --quiet data/ || echo "changes=true" >> $GITHUB_OUTPUT
+    
+    - name: Commit and push if changes
+      if: steps.git-check.outputs.changes == 'true'
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add data/
+        git commit -m "📊 Auto-update trading data $(date +'%Y-%m-%d %H:%M')"
+        git push
