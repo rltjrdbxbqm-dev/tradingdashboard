@@ -1,19 +1,13 @@
-"""
-================================================================================
-📊 트레이딩 데이터 자동 업데이트 스크립트
-================================================================================
-- 완료된 캔들만 저장 (진행 중인 캔들 제외)
-- 마지막 저장 시점 이후 데이터만 fetch
-- 중복 자동 제거
-================================================================================
-"""
-
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
 import os
 import requests
 import time
+import warnings
+
+# 불필요한 FutureWarning 숨기기
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # ════════════════════════════════════════════════════════════════════════════════
 # 설정
@@ -70,6 +64,7 @@ def load_existing_csv(filepath: str) -> pd.DataFrame:
             df['datetime'] = pd.to_datetime(df['datetime'])
         
         df.set_index('datetime', inplace=True)
+        # 중요: CSV 데이터는 Timezone 정보 없이 로드 (Naive)
         df.index = df.index.tz_localize(None)
         
         return df
@@ -119,8 +114,10 @@ def update_tqqq():
     filepath = os.path.join(DATA_DIR, 'tqqq_daily.csv')
     existing = load_existing_csv(filepath)
     
-    # 마지막 완료된 캔들 시간
+    # 마지막 완료된 캔들 시간 (UTC)
     last_complete = get_last_completed_candle_time('1d')
+    # 비교를 위해 Timezone 정보 제거 (Naive)
+    last_complete = last_complete.replace(tzinfo=None)
     
     # 시작 날짜 결정
     if existing is not None and len(existing) > 0:
@@ -138,7 +135,8 @@ def update_tqqq():
         import yfinance as yf
         
         end_date = last_complete + timedelta(days=1)
-        data = yf.download('TQQQ', start=start_date, end=end_date, progress=False)
+        # auto_adjust=False 추가하여 경고 해결 및 데이터 일관성 확보
+        data = yf.download('TQQQ', start=start_date, end=end_date, progress=False, auto_adjust=False)
         
         if data.empty:
             print("  ⚠️ No new data available")
@@ -174,8 +172,9 @@ def fetch_binance_futures(symbol: str, interval: str, start_time: datetime, end_
     url = "https://fapi.binance.com/fapi/v1/klines"
     
     all_data = []
-    current_start = int(start_time.timestamp() * 1000)
-    end_ts = int(end_time.timestamp() * 1000)
+    # Timezone 정보가 있다면 timestamp로 변환 시 고려됨
+    current_start = int(start_time.replace(tzinfo=timezone.utc).timestamp() * 1000)
+    end_ts = int(end_time.replace(tzinfo=timezone.utc).timestamp() * 1000)
     
     while current_start < end_ts:
         params = {
@@ -210,7 +209,7 @@ def fetch_binance_futures(symbol: str, interval: str, start_time: datetime, end_
     
     df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
     df.set_index('datetime', inplace=True)
-    df.index = df.index.tz_localize(None)
+    df.index = df.index.tz_localize(None) # Naive로 변환
     
     for col in ['open', 'high', 'low', 'close', 'volume']:
         df[col] = df[col].astype(float)
@@ -223,6 +222,8 @@ def update_bitget():
     print("\n🔶 Updating Bitget (Binance Futures) 4H data...")
     
     last_complete = get_last_completed_candle_time('4h')
+    # [수정] 비교 에러 방지를 위해 Timezone 제거 (Naive로 통일)
+    last_complete = last_complete.replace(tzinfo=None)
     
     for symbol in BITGET_SYMBOLS:
         name = symbol.replace('USDT', '').lower()
@@ -235,6 +236,7 @@ def update_bitget():
             last_date = existing.index.max()
             start_time = last_date + timedelta(hours=4)
             
+            # 여기서 offset-naive vs offset-aware 에러가 발생했었음 -> 이제 둘 다 Naive라 해결됨
             if start_time > last_complete:
                 print(f"  ℹ️ {symbol}: Already up to date")
                 continue
@@ -360,7 +362,11 @@ def update_upbit():
     last_complete_4h = get_last_completed_candle_time('4h')
     last_complete_1d = get_last_completed_candle_time('1d')
     
-    # 한국 시간으로 변환 (업비트는 KST 기준)
+    # [수정] Timezone 제거 (Naive로 통일하여 계산)
+    last_complete_4h = last_complete_4h.replace(tzinfo=None)
+    last_complete_1d = last_complete_1d.replace(tzinfo=None)
+    
+    # 한국 시간으로 변환 (값만 +9시간, Naive 유지)
     kst_offset = timedelta(hours=9)
     last_complete_4h_kst = last_complete_4h + kst_offset
     last_complete_1d_kst = last_complete_1d + kst_offset
